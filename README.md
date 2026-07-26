@@ -85,13 +85,9 @@ rc.local-Eintrag und `/data/dbus-novolto` restlos)
 
 ## Anpassen / Prüfen
 
-- Phase (`phase`) und Systemposition (`position`: ac_in/ac_out/ac_in_2)
-  in config.ini an die tatsächliche Verkabelung anpassen.
 - `enable_sptw_control`, `enable_sptwh_control`, `enable_temperature2_service`
   je nach Bedarf ein-/ausschalten, falls der Novolto diese Werte nicht liefert.
-- Später auf Cerbo-eigenen Broker umziehen: am Cerbo *MQTT on LAN
-  (plaintext)* aktivieren, Novolto auf die Cerbo-IP zeigen lassen,
-  in config.ini `host = 127.0.0.1` und Zugangsdaten leeren.
+
 
 ## Verwandtes Projekt
 
