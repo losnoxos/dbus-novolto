@@ -3,23 +3,10 @@
 dbus-novolto v1.1.0
 ===================
 Venus OS Treiber fuer den Novolto Heizstab via lokalem MQTT.
-
-v1.1.0 -- Fehlt der Novolto laenger als timeout_seconds (Geraet aus,
-WLAN weg, ...), gibt es jetzt genau eine Log-Zeile beim Verlust und
-eine beim Wiederkommen der Daten -- der Watchdog selbst hat vorher
-schon nichts wiederholt geloggt (kein Risiko fuer vollgeschriebene
-Logs), aber es gab bisher gar keine Sichtbarkeit dieses Zustands.
-
-v1.0.0 -- Initial Release
-Anzeige (Leistung, Spannung/Strom je Phase, Temperaturen, Energiezaehler),
-manuelle Leistungsvorgabe sowie einstellbare Max. Wassertemperatur und
-Hysterese ueber die SwitchableOutput-API. Ein/Aus ist eine reine
-Statusanzeige (avp > HEATING_THRESHOLD_W), da der Novolto kein echtes
-An/Aus kennt -- Steuerung laeuft ausschliesslich ueber das Leistungsfeld
-(0 W = aus). Protokoll-Eigenheiten (z.B. dass spp als Integer, sptw/sptwh
-aber als Float gesendet werden muessen) sind in NOVOLTO-MQTT.md
-dokumentiert, nicht hier im Changelog -- dort bitte nachschlagen, bevor
-an den MQTT-Payloads etwas geaendert wird.
+Versionshistorie: siehe CHANGELOG.md. Protokoll-Details/Eigenheiten
+(z.B. dass spp als Integer, sptw/sptwh aber als Float gesendet werden
+muessen): siehe NOVOLTO-MQTT.md -- dort bitte nachschlagen, bevor an
+den MQTT-Payloads etwas geaendert wird.
 
 Der Novolto publiziert ein JSON-Telegramm auf <serial>/info, z.B.:
   {"serial":"XXX.XXX.XXXXXX","unix_time":...,"msi":5,"avt1":35.48,
