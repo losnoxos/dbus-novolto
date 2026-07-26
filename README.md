@@ -88,7 +88,6 @@ rc.local-Eintrag und `/data/dbus-novolto` restlos)
 - `enable_sptw_control`, `enable_sptwh_control`, `enable_temperature2_service`
   je nach Bedarf ein-/ausschalten, falls der Novolto diese Werte nicht liefert.
 
-
 ## Verwandtes Projekt
 
 [victronenergy.heatpump.novolto](https://github.com/losnoxos/victronenergy.heatpump.novolto)
