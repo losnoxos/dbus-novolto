@@ -1,5 +1,15 @@
 # Obsidian-Notiz bleibt lokal, wird nicht auf GitHub veröffentlicht
-_dbus-adapter Deckblatt.md
+_dbus-novolto Deckblatt.md
+
+# Echte Zugangsdaten -- nur config.ini.example wird versioniert
+config.ini
+
+# Laufzeit-/Zählerstand vom Cerbo GX, kein Quellcode
+energy.json
+
+# daemontools Laufzeit-Status (wird automatisch neu erzeugt)
+service/supervise/
+service/log/supervise/
 
 # OS
 .DS_Store
@@ -12,9 +22,3 @@ __pycache__/
 .venv/
 venv/
 *.egg-info/
-
-# Node
-node_modules/
-
-# Secrets/Config
-.env

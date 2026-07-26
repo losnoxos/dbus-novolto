@@ -1,0 +1,45 @@
+[mqtt]
+; Broker, auf dem der Novolto publiziert (z.B. HA-Add-on Mosquitto,
+; oder spaeter der Cerbo-eigene Broker: host=127.0.0.1, User/Passwort leer)
+host = IP
+port = 1883
+username = USER
+password = PASSWORD
+
+; Serial des Heizstabs = Topic-Prefix
+base_topic = GERÄTEID
+
+; Info-Topic: <base_topic>/info (ein JSON-Telegramm mit allen Werten)
+topic_info = info
+; Control-Topic: <base_topic>/<topic_control> -- vor erstem Test pruefen,
+; siehe README
+topic_control = control
+control_sensor_name = spp
+
+[device]
+name = Novolto Heizstab
+deviceinstance_acload = 40
+deviceinstance_temperature = 41
+max_power = 3000
+power_step = 20
+timeout_seconds = 120
+enable_temperature_service = true
+; Sollwert zyklisch wiederholen in Sekunden (0 = aus)
+resend_setpoint_seconds = 0
+; Energiezaehler: "integrate" (aus avp integriert, persistent) oder
+; "wel" (Zaehler des Geraets, sobald dessen Einheit/Verhalten geklaert ist)
+energy_source = integrate
+; Ist-Werte live in den Schalternamen im Switch Pane schreiben
+show_temp_in_switch = true
+show_power_in_switch = true
+; Phase, an der der Heizstab haengt: L1 / L2 / L3
+phase = L1
+; Position im System: ac_out, ac_in (= AC-Eingang 1) oder ac_in_2
+position = ac_in
+; Max. Wassertemperatur (sptw) als einstellbares Feld im Switch Pane
+enable_sptw_control = true
+sptw_min = 20
+sptw_max = 75
+; Zweiter Temperatursensor fuer avt1 (Elektronik-/Stabtemperatur)
+enable_temperature2_service = false
+deviceinstance_temperature2 = 42
