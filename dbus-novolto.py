@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """
-dbus-novolto v1.0.0
+dbus-novolto v1.1.0
 ===================
 Venus OS Treiber fuer den Novolto Heizstab via lokalem MQTT.
+
+v1.1.0 -- Fehlt der Novolto laenger als timeout_seconds (Geraet aus,
+WLAN weg, ...), gibt es jetzt genau eine Log-Zeile beim Verlust und
+eine beim Wiederkommen der Daten -- der Watchdog selbst hat vorher
+schon nichts wiederholt geloggt (kein Risiko fuer vollgeschriebene
+Logs), aber es gab bisher gar keine Sichtbarkeit dieses Zustands.
 
 v1.0.0 -- Initial Release
 Anzeige (Leistung, Spannung/Strom je Phase, Temperaturen, Energiezaehler),
@@ -189,6 +195,7 @@ class NovoltoDriver:
         self.cfg = cfg
         self.energy = EnergyCounter()
         self.last_msg = 0.0
+        self._connected = True
         self.heating = False
         self.setpoint = 0
         self._last_name_temp = None
@@ -224,7 +231,7 @@ class NovoltoDriver:
         self.svc = s
 
         s.add_path("/Mgmt/ProcessName", "dbus-novolto")
-        s.add_path("/Mgmt/ProcessVersion", "1.0.0")
+        s.add_path("/Mgmt/ProcessVersion", "1.1.0")
         s.add_path("/Mgmt/Connection", "MQTT %s:%d" % (cfg.host, cfg.port))
         s.add_path("/DeviceInstance", cfg.instance_acload)
         s.add_path("/ProductId", 0xFFFF)
@@ -328,7 +335,7 @@ class NovoltoDriver:
         if cfg.enable_temp:
             t = make_service("com.victronenergy.temperature.novolto")
             t.add_path("/Mgmt/ProcessName", "dbus-novolto")
-            t.add_path("/Mgmt/ProcessVersion", "1.0.0")
+            t.add_path("/Mgmt/ProcessVersion", "1.1.0")
             t.add_path("/Mgmt/Connection", "MQTT %s:%d" % (cfg.host, cfg.port))
             t.add_path("/DeviceInstance", cfg.instance_temp)
             t.add_path("/ProductId", 0xFFFF)
@@ -350,7 +357,7 @@ class NovoltoDriver:
         if cfg.enable_temp2:
             t2 = make_service("com.victronenergy.temperature.novolto2")
             t2.add_path("/Mgmt/ProcessName", "dbus-novolto")
-            t2.add_path("/Mgmt/ProcessVersion", "1.0.0")
+            t2.add_path("/Mgmt/ProcessVersion", "1.1.0")
             t2.add_path("/Mgmt/Connection",
                         "MQTT %s:%d" % (cfg.host, cfg.port))
             t2.add_path("/DeviceInstance", cfg.instance_temp2)
@@ -488,6 +495,9 @@ class NovoltoDriver:
         self.last_msg = time.monotonic()
         s = self.svc
         s["/Connected"] = 1
+        if not self._connected:
+            self._connected = True
+            log.info("Novolto sendet wieder Daten")
 
         power = d.get("avp")
         if power is not None:
@@ -564,6 +574,10 @@ class NovoltoDriver:
     def _watchdog(self):
         if self.last_msg and \
            time.monotonic() - self.last_msg > self.cfg.timeout:
+            if self._connected:
+                self._connected = False
+                log.warning("Keine Daten vom Novolto seit %d s "
+                            "(Geraet aus/getrennt?)", self.cfg.timeout)
             s = self.svc
             s["/Connected"] = 0
             s["/Ac/Power"] = None
