@@ -49,6 +49,8 @@ daemontools-Service und trägt den Symlink in `/data/rc.local` ein
 
 Neustart des Treibers: `svc -t /service/dbus-novolto`
 Log: `tail -f /var/log/dbus-novolto/current | tai64nlocal`
+Deinstallieren: `sh /data/dbus-novolto/uninstall.sh` (entfernt Service,
+rc.local-Eintrag und `/data/dbus-novolto` restlos)
 
 ## Verhalten
 
@@ -75,7 +77,9 @@ Log: `tail -f /var/log/dbus-novolto/current | tai64nlocal`
   Info-Telegramm sendet (`msi`-Feld, siehe NOVOLTO-MQTT.md). Das kann
   spürbar träge wirken — das ist kein Bug in dbus-novolto, sondern das
   Sendeintervall des Geräts.
-- Keine MQTT-Daten für `timeout_seconds` → Gerät geht auf "Disconnected".
+- Keine MQTT-Daten für `timeout_seconds` (Standard 120 s) → Gerät geht
+  auf "Disconnected", eine einzelne Log-Zeile beim Verlust und eine
+  beim Wiederkommen (keine Wiederholung).
 - Energiezähler wird aus der Ist-Leistung integriert und alle 5 Minuten
   nach `/data/dbus-novolto/energy.json` persistiert (übersteht Neustarts).
 
@@ -88,6 +92,14 @@ Log: `tail -f /var/log/dbus-novolto/current | tai64nlocal`
 - Später auf Cerbo-eigenen Broker umziehen: am Cerbo *MQTT on LAN
   (plaintext)* aktivieren, Novolto auf die Cerbo-IP zeigen lassen,
   in config.ini `host = 127.0.0.1` und Zugangsdaten leeren.
+
+## Verwandtes Projekt
+
+[victronenergy.heatpump.novolto](https://github.com/losnoxos/victronenergy.heatpump.novolto)
+ist ein experimenteller Fork, der den nativen `com.victronenergy.heatpump`-
+Gerätetyp aus der Venus-OS-Beta testet (Pendant zu `com.victronenergy.evcharger`
+für Wallboxen). Braucht Venus OS Beta, bringt aktuell (Stand der Tests dort)
+noch keinen sichtbaren GUI-Vorteil gegenüber diesem Repo hier.
 
 ## Lizenz
 

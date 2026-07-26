@@ -6,9 +6,10 @@ DEST=/data/dbus-novolto
 
 echo ">> Kopiere nach $DEST"
 mkdir -p "$DEST"
-cp -r "$SRC/dbus-novolto.py" "$SRC/service" "$DEST/"
+cp -r "$SRC/dbus-novolto.py" "$SRC/uninstall.sh" "$SRC/service" "$DEST/"
 [ -f "$DEST/config.ini" ] || cp "$SRC/config.ini" "$DEST/"
-chmod 755 "$DEST/dbus-novolto.py" "$DEST/service/run" "$DEST/service/log/run"
+chmod 755 "$DEST/dbus-novolto.py" "$DEST/uninstall.sh" \
+    "$DEST/service/run" "$DEST/service/log/run"
 # config.ini enthaelt ggf. ein Klartext-MQTT-Passwort -- nicht world-readable
 chmod 600 "$DEST/config.ini"
 
@@ -32,3 +33,4 @@ echo "   (config.ini.example im Projektordner als Vorlage nehmen, falls"
 echo "   noch keine config.ini existiert)"
 echo "   Start/Neustart:  svc -t /service/dbus-novolto"
 echo "   Log:             tail -f /var/log/dbus-novolto/current | tai64nlocal"
+echo "   Deinstallieren:  sh $DEST/uninstall.sh"
