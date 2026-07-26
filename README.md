@@ -10,8 +10,9 @@ Max. Wassertemperatur über die SwitchableOutput-API.
   Energiezähler (kWh, persistent über Neustarts) und Spannung/Strom je Phase
 - **Switch Pane (GUI v2 / Remote Console / VRM):** Gruppe "Novolto" mit
   - **Ein/Aus** als reine Statusanzeige (nicht schaltbar!) — zeigt, ob der
-    Heizstab laut Gerät gerade tatsächlich heizt (`rod_st`). Der Novolto
-    kennt kein echtes An/Aus, Steuerung läuft über das Leistungsfeld.
+    Heizstab gerade tatsächlich heizt (`avp` über einem Schwellwert,
+    `HEATING_THRESHOLD_W`). Der Novolto kennt kein echtes An/Aus,
+    Steuerung läuft über das Leistungsfeld.
   - Numerisches Eingabefeld **Leistung** 0–3000 W in 20-W-Schritten (zeigt
     live die Ist-Leistung im Feldnamen an) — `0 W` = aus
   - Numerisches Eingabefeld **Max. Temperatur** (Sollwassertemperatur)
@@ -52,8 +53,11 @@ Log: `tail -f /var/log/dbus-novolto/current | tai64nlocal`
 ## Verhalten
 
 - Es gibt kein echtes An/Aus am Novolto — `0 W` Leistungsvorgabe *ist*
-  "aus". Die Ein/Aus-Anzeige im Switch Pane ist reiner Status (`rod_st`
-  aus dem Info-Telegramm), nicht schaltbar.
+  "aus". Die Ein/Aus-Anzeige im Switch Pane ist reiner Status, abgeleitet
+  aus `avp` (Ist-Leistung über `HEATING_THRESHOLD_W`, 15 W), nicht
+  schaltbar. `rod_st` wäre naheliegender gewesen, erwies sich im Test
+  aber als unzuverlässig (blieb bei niedrigen Leistungsstufen auf 1
+  hängen, siehe NOVOLTO-MQTT.md).
 - Eingaben im Leistungsfeld werden auf das konfigurierte Watt-Raster
   (`power_step`) gerundet und sofort published.
 - `spp` wird bewusst als Integer gesendet (20 statt 20.0) — die
@@ -65,7 +69,12 @@ Log: `tail -f /var/log/dbus-novolto/current | tai64nlocal`
 - Externe Sollwert-Änderungen (App/Home Assistant) ziehen den
   Leistungs-Slider automatisch nach, außer kurz nach einem eigenen
   Publish (Echo-Unterdrückung, 10 s). Die Ein/Aus-Statusanzeige
-  aktualisiert sich unabhängig davon direkt aus `rod_st`.
+  aktualisiert sich unabhängig davon direkt aus `avp`.
+- Alle Anzeigen (Leistung, Temperaturen, Ein/Aus-Status, ...)
+  aktualisieren sich nur so schnell, wie der Novolto selbst sein
+  Info-Telegramm sendet (`msi`-Feld, siehe NOVOLTO-MQTT.md). Das kann
+  spürbar träge wirken — das ist kein Bug in dbus-novolto, sondern das
+  Sendeintervall des Geräts.
 - Keine MQTT-Daten für `timeout_seconds` → Gerät geht auf "Disconnected".
 - Energiezähler wird aus der Ist-Leistung integriert und alle 5 Minuten
   nach `/data/dbus-novolto/energy.json` persistiert (übersteht Neustarts).

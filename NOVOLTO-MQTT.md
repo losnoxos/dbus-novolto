@@ -7,6 +7,9 @@ falls weitere Felder/Einstellungen angebunden werden sollen.
 ## Info-Telegramm (`<base_topic>/<topic_info>`, Standard `info`)
 
 Ein JSON-Objekt mit allen Messwerten, zyklisch alle `msi` Sekunden.
+Sämtliche Anzeigen in Victron (Leistung, Temperaturen, Ein/Aus-Status)
+sind dadurch nur so aktuell wie das letzte Telegramm — spürbare
+Verzögerung ist normales Geräteverhalten, kein Bug in dbus-novolto.
 
 | Feld | Typ | Bedeutung | Genutzt in dbus-novolto |
 |---|---|---|---|
@@ -25,7 +28,7 @@ Ein JSON-Objekt mit allen Messwerten, zyklisch alle `msi` Sekunden.
 | `rssi` | Integer | WLAN-Signalstärke | nein — Diagnosewert, aktuell nicht angezeigt |
 | `st` | Integer | Bitflags Warnungen/Fehler, siehe unten | nein — aktuell nicht ausgewertet |
 | `wel` | Float | Energie seit Geräte-Boot, kWh, **Schätzwert** | optional über `energy_source = wel` |
-| `rod_st` | Integer | 0/1, ob der Heizstab **real gerade heizt** (real getestet, siehe unten) | ja, Ein/Aus-Statusanzeige (read-only) |
+| `rod_st` | Integer | 0/1, sollte "Heizstab aktiv" bedeuten, erwies sich aber als unzuverlässig (siehe unten) | nein |
 | `triacon`, `r1on`, `r2on` | — | laut Hersteller "miscellaneous diagnostic data", nicht weiter dokumentiert | nein |
 
 ⚠️ Die Typ-Spalte ist die von Novolto dokumentierte Bedeutung im
@@ -33,10 +36,17 @@ Info-Telegramm — welcher JSON-Typ beim **Setzen** über `<topic_control>`
 tatsächlich akzeptiert wird, weicht bei `spp`/`sptw`/`sptwh` davon ab,
 siehe "Real-World-Erkenntnis" weiter unten.
 
-**`rod_st` real verifiziert (nicht in der Novolto-Doku enthalten):** per Vergleich
-von Info-Telegrammen im Leerlauf (`rod_st:0`, `avp:2.7 W`) und beim Heizen
-(`rod_st:1`, `avp:131 W`) eindeutig bestätigt. `triacon` ist dagegen ein reiner
-Zähler (steigt monoton, auch wenn `rod_st` wieder 0 ist) und taugt nicht als
+**`rod_st` real getestet, aber unzuverlässig (nicht in der Novolto-Doku
+enthalten):** bei einem ersten Test schien `rod_st` exakt mit dem
+Heizstatus zu korrelieren (Leerlauf `rod_st:0`/`avp:2.7 W`, Heizen bei
+hoher Last `rod_st:1`/`avp:131 W`). Ein weiterer Test bei niedrigeren
+Leistungsstufen (40 W Sollwert) zeigte aber: `rod_st` blieb auf `1`
+hängen, obwohl `avp` wieder auf Leerlaufniveau (3–5 W) gefallen war —
+vermutlich weil `rod_st` eher "Heizkreis aktiviert/angefordert" als
+"gerade tatsächlich Strom fließt" abbildet. dbus-novolto verwendet daher
+seit v0.14 `avp > HEATING_THRESHOLD_W` (15 W) statt `rod_st` für die
+Ein/Aus-Statusanzeige. `triacon` ist zudem ein reiner Zähler (steigt
+monoton, auch wenn `rod_st` wieder 0 ist) und taugt ebenfalls nicht als
 Statusfeld.
 
 **Wichtig zu `wel`:** Der Wert wird laut Hersteller seit dem letzten Geräte-Neustart

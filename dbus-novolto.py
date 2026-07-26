@@ -1,70 +1,19 @@
 #!/usr/bin/env python3
 """
-dbus-novolto v0.13
+dbus-novolto v1.0.0
 ===================
 Venus OS Treiber fuer den Novolto Heizstab via lokalem MQTT.
 
-Aenderungen:
-  v0.13 Ergebnisse eines Code-Reviews vor Oeffentlichmachung behoben:
-        - Fehlerhafte/boesartige Info-Telegramme (falscher Typ, NaN)
-          liessen den Treiber crashen -- bei retained MQTT-Nachrichten
-          ein permanenter Crash-Loop. _update() faengt das jetzt ab.
-        - NaN/Infinity in avp haette den Energiezaehler dauerhaft und
-          persistent korrumpiert -- wird jetzt verworfen.
-        - Leistungs-Rasterung konnte ueber max_power hinausrunden
-          (z.B. max_power kein Vielfaches von power_step) -- erneutes
-          Clamping nach der Rasterung ergaenzt.
-        - Watchdog (Verbindung verloren) setzte Heizstatus, Sollwert
-          und Temperatur-Sollwerte nicht zurueck -- GUI haette veraltete
-          Werte als aktuell angezeigt. Jetzt werden auch rod_st-Status,
-          Dimming-Werte und dynamische CustomNames invalidiert.
-        - power_step=0 in config.ini haette ZeroDivisionError ausgeloest
-          -- jetzt auf min. 1 geklemmt.
-        - Fehlende Pflichtfelder in config.ini (host/base_topic/Sections)
-          gaben kryptische Tracebacks statt klarer Fehlermeldung.
-        - SIGTERM (Service-Stop/Reboot) beendete den Prozess ohne
-          Energiezaehler-Persistierung -- jetzt sauberes mainloop.quit().
-        - config.ini (Klartext-Passwort) wird von install.sh jetzt 600
-          statt world-readable angelegt.
-  v0.12 Heizstab-Schalter (SwitchableOutput/0) ist jetzt read-only und
-        zeigt den echten Heizstatus aus rod_st (0/1), statt spp>0 als
-        Annaeherung zu nehmen. Der Novolto kennt kein echtes An/Aus --
-        Steuerung laeuft ausschliesslich ueber das Leistungsfeld (0 W =
-        aus). switch_state/setpoint_memory entfallen dadurch komplett;
-        _on_dimming_changed published jetzt immer direkt.
-  v0.11 Korrektur zu v0.10: Der Typwechsel gilt NUR fuer spp, nicht fuer
-        sptw/sptwh -- die brauchen weiterhin Float (ret=13 "Module
-        SENSOR: SPTWH -> wrong type" bei Integer, per MQTT-Ack
-        bestaetigt). Jedes der drei Felder hat also einen eigenen,
-        empirisch bestaetigten Typ -- nicht pauschal uebertragbar.
-  v0.10 Fix: spp wird als Integer statt Float published (20 statt
-        20.0). Die v0.7-Annahme war falsch bzw. firmwareabhaengig
-        veraltet -- real bestaetigt per MQTT-Ack: die Firmware lehnt
-        FLOAT-Werte fuer SPP mit ret=13 "wrong type" ab. Dadurch wurde
-        die Leistungsvorgabe nie tatsaechlich uebernommen (Schalter
-        sprang nach der 10s-Echo-Unterdrueckung wieder zurueck).
-  v0.9  Feste Reihenfolge der Switch-Pane-Felder (Heizstab, Leistung,
-        Max. Temperatur, Hysterese) erzwungen. Venus OS sortiert die
-        Eintraege alphabetisch nach CustomName, nicht nach Index --
-        daher Ziffern-Praefix (1..4) in den Namen.
-  v0.8  Hysterese der Wassertemperatur (sptwh) als einstellbares Feld
-        im Switch Pane (enable_sptwh_control).
-  v0.7  (veraltet/falsifiziert, siehe v0.10) Sollte sptw/spp als Float
-        published haben (34.0 statt 34), da vermutet wurde, die
-        Firmware lehne Integer-Werte mit ret=13 "wrong type" ab.
-  v0.6  Max. Wassertemperatur (sptw) als einstellbares Feld im Switch
-        Pane (enable_sptw_control). Phase (L1/L2/L3) und Position
-        (AC-In/Out) konfigurierbar. Optionaler zweiter Temperatursensor
-        fuer avt1 (enable_temperature2_service).
-  v0.5  Ist-Leistung (avp) wird live im Namen des Leistungs-Felds
-        angezeigt (show_power_in_switch), Aufloesung 10 W.
-  v0.4  Toggle AUS setzt Leistungsanzeige auf 0; letzter Wert wird
-        gemerkt und bei EIN wiederhergestellt. Wassertemperatur wird
-        live im Schalternamen angezeigt (show_temp_in_switch).
-  v0.3  Leistungsvorgabe als Numeric-Input-Popup (Typ 8) statt Slider;
-        Ruecksync ueberschreibt vorgemerkte Werte nicht mehr.
-  v0.2  Umstellung auf reales Telegramm: ein JSON auf <serial>/info,
-        avp als Ist-Leistung, private dbus-Verbindung pro Service.
+v1.0.0 -- Initial Release
+Anzeige (Leistung, Spannung/Strom je Phase, Temperaturen, Energiezaehler),
+manuelle Leistungsvorgabe sowie einstellbare Max. Wassertemperatur und
+Hysterese ueber die SwitchableOutput-API. Ein/Aus ist eine reine
+Statusanzeige (avp > HEATING_THRESHOLD_W), da der Novolto kein echtes
+An/Aus kennt -- Steuerung laeuft ausschliesslich ueber das Leistungsfeld
+(0 W = aus). Protokoll-Eigenheiten (z.B. dass spp als Integer, sptw/sptwh
+aber als Float gesendet werden muessen) sind in NOVOLTO-MQTT.md
+dokumentiert, nicht hier im Changelog -- dort bitte nachschlagen, bevor
+an den MQTT-Payloads etwas geaendert wird.
 
 Der Novolto publiziert ein JSON-Telegramm auf <serial>/info, z.B.:
   {"serial":"XXX.XXX.XXXXXX","unix_time":...,"msi":5,"avt1":35.48,
@@ -73,7 +22,8 @@ Der Novolto publiziert ein JSON-Telegramm auf <serial>/info, z.B.:
    "avf":50.00,"wel":0.00,"rssi":0}
 
 Feldnutzung (vollstaendige Referenz: NOVOLTO-MQTT.md):
-  avp   -> /Ac/Power (gemessene Ist-Leistung)
+  avp   -> /Ac/Power (gemessene Ist-Leistung), Basis fuer Ein/Aus-
+           Statusanzeige (read-only, avp > HEATING_THRESHOLD_W)
   avv   -> /Ac/L1/Voltage
   avi   -> /Ac/L1/Current
   avf   -> /Ac/Frequency
@@ -84,8 +34,8 @@ Feldnutzung (vollstaendige Referenz: NOVOLTO-MQTT.md):
   sptwh -> Hysterese Wassertemperatur (Anzeige Slider-Rueckmeldung)
   wel   -> Energiezaehler des Geraets (Schaetzwert seit Geraete-Boot,
            nicht persistent), alternativ zur eigenen Integration aus avp
-  rod_st -> Heizstab-Status (0/1), read-only SwitchableOutput/0/State
-  rssi, st, triacon, r1on, r2on -> aktuell nicht ausgewertet
+  rssi, st, rod_st, triacon, r1on, r2on -> aktuell nicht ausgewertet
+           (rod_st erwies sich als unzuverlaessig, siehe NOVOLTO-MQTT.md)
 
 Registriert:
   - com.victronenergy.acload.novolto (+ SwitchableOutput 0-3: Ein/Aus,
@@ -127,6 +77,12 @@ ENERGY_FILE = os.path.join(DATA_DIR, "energy.json")
 TYPE_TOGGLE = 1
 TYPE_BASIC_SLIDER = 7
 TYPE_NUMERIC_INPUT = 8
+
+# avp-Schwelle fuer "heizt aktiv" (Ein/Aus-Statusanzeige). Leerlauf misst
+# ca. 3-5 W, kleinste steuerbare Stufe ist power_step (i.d.R. >= 20 W) --
+# 15 W liegt sicher dazwischen. rod_st erwies sich real als unzuverlaessig
+# (blieb bei niedrigen Leistungsstufen auf 1 haengen).
+HEATING_THRESHOLD_W = 15
 
 
 class Config:
@@ -268,7 +224,7 @@ class NovoltoDriver:
         self.svc = s
 
         s.add_path("/Mgmt/ProcessName", "dbus-novolto")
-        s.add_path("/Mgmt/ProcessVersion", "0.13")
+        s.add_path("/Mgmt/ProcessVersion", "1.0.0")
         s.add_path("/Mgmt/Connection", "MQTT %s:%d" % (cfg.host, cfg.port))
         s.add_path("/DeviceInstance", cfg.instance_acload)
         s.add_path("/ProductId", 0xFFFF)
@@ -372,7 +328,7 @@ class NovoltoDriver:
         if cfg.enable_temp:
             t = make_service("com.victronenergy.temperature.novolto")
             t.add_path("/Mgmt/ProcessName", "dbus-novolto")
-            t.add_path("/Mgmt/ProcessVersion", "0.13")
+            t.add_path("/Mgmt/ProcessVersion", "1.0.0")
             t.add_path("/Mgmt/Connection", "MQTT %s:%d" % (cfg.host, cfg.port))
             t.add_path("/DeviceInstance", cfg.instance_temp)
             t.add_path("/ProductId", 0xFFFF)
@@ -394,7 +350,7 @@ class NovoltoDriver:
         if cfg.enable_temp2:
             t2 = make_service("com.victronenergy.temperature.novolto2")
             t2.add_path("/Mgmt/ProcessName", "dbus-novolto")
-            t2.add_path("/Mgmt/ProcessVersion", "0.13")
+            t2.add_path("/Mgmt/ProcessVersion", "1.0.0")
             t2.add_path("/Mgmt/Connection",
                         "MQTT %s:%d" % (cfg.host, cfg.port))
             t2.add_path("/DeviceInstance", cfg.instance_temp2)
@@ -547,6 +503,16 @@ class NovoltoDriver:
                     self._last_name_power = shown
                     s["/SwitchableOutput/1/Settings/CustomName"] = \
                         "2 Leistung · Ist: %d W" % shown
+            # rod_st bleibt laut Praxistest bei niedrigen Leistungsstufen
+            # auf 1 haengen, obwohl real nicht mehr geheizt wird -- avp
+            # ist der verlaessliche Indikator (Leerlauf ca. 3-5 W,
+            # kleinste Stufe = power_step, mind. 20 W).
+            heating = power > HEATING_THRESHOLD_W
+            if heating != self.heating:
+                self.heating = heating
+                s["/SwitchableOutput/0/State"] = 1 if heating else 0
+                s["/SwitchableOutput/0/Status"] = 9 if heating else 0
+                log.info("Heizt -> %s", "JA" if heating else "NEIN")
         if "avv" in d:
             s["/Ac/%s/Voltage" % self.cfg.phase] = float(d["avv"])
         if "avi" in d:
@@ -566,17 +532,6 @@ class NovoltoDriver:
             if spp != self.setpoint:
                 self.setpoint = spp
                 s["/SwitchableOutput/1/Dimming"] = spp
-
-        # rod_st ist die einzige direkte Statusangabe des Geraets, ob
-        # gerade tatsaechlich geheizt wird (0/1) -- unabhaengig vom
-        # Sollwert, da der Stab bei Erreichen von sptw von selbst abschaltet.
-        if "rod_st" in d:
-            heating = bool(int(d["rod_st"]))
-            if heating != self.heating:
-                self.heating = heating
-                s["/SwitchableOutput/0/State"] = 1 if heating else 0
-                s["/SwitchableOutput/0/Status"] = 9 if heating else 0
-                log.info("Heizt -> %s", "JA" if heating else "NEIN")
 
         if self.cfg.enable_sptw and "sptw" in d \
                 and time.monotonic() > self._suppress_sptw:
