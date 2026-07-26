@@ -1,23 +1,27 @@
 # dbus-novolto
 
 Venus OS Treiber (Victron Cerbo GX) für den Novolto Heizstab (P2300/P3000)
-via lokalem MQTT — Anzeige, Ein/Aus, manuelle Leistungsvorgabe und
-einstellbare Max. Wassertemperatur über die SwitchableOutput-API.
+via lokalem MQTT — Anzeige, manuelle Leistungsvorgabe und einstellbare
+Max. Wassertemperatur über die SwitchableOutput-API.
 
 ## Was erscheint im Victron
 
 - **Geräteliste / VRM:** "Novolto Heizstab" als AC-Last mit Ist-Leistung (W),
   Energiezähler (kWh, persistent über Neustarts) und Spannung/Strom je Phase
 - **Switch Pane (GUI v2 / Remote Console / VRM):** Gruppe "Novolto" mit
-  - Toggle **Ein/Aus**
+  - **Ein/Aus** als reine Statusanzeige (nicht schaltbar!) — zeigt, ob der
+    Heizstab laut Gerät gerade tatsächlich heizt (`rod_st`). Der Novolto
+    kennt kein echtes An/Aus, Steuerung läuft über das Leistungsfeld.
   - Numerisches Eingabefeld **Leistung** 0–3000 W in 20-W-Schritten (zeigt
-    live die Ist-Leistung im Feldnamen an)
+    live die Ist-Leistung im Feldnamen an) — `0 W` = aus
   - Numerisches Eingabefeld **Max. Temperatur** (Sollwassertemperatur)
   - Numerisches Eingabefeld **Hysterese** (Heizstab schaltet aus oberhalb
     `sptw + Hysterese/2`, wieder ein unterhalb `sptw - Hysterese/2`,
     `enable_sptwh_control`)
-- **Temperatursensor** "Novolto Speicher" (avtw), optional ein zweiter
-  Sensor "Novolto Elektronik" (avt1), beide mit VRM-Historie
+- **Temperatursensor** "Novolto Speicher" (avtw, `enable_temperature_service`),
+  optional ein zweiter Sensor "Novolto Elektronik" (avt1,
+  `enable_temperature2_service`) — beide unabhängig voneinander
+  abschaltbar, beide mit VRM-Historie
 
 ## Funktionsweise
 
@@ -47,15 +51,21 @@ Log: `tail -f /var/log/dbus-novolto/current | tai64nlocal`
 
 ## Verhalten
 
-- Schalter AUS → `spp = 0` wird publiziert, letzter Sollwert bleibt für
-  das Wiedereinschalten gemerkt (`setpoint_memory`).
-- Eingaben werden auf das konfigurierte Watt-Raster (`power_step`)
-  gerundet und nur bei eingeschaltetem Toggle gesendet.
-- sptw/spp werden bewusst als Float gesendet (34.0 statt 34) — die
-  Firmware lehnt Integer-Werte mit `ret=13 "wrong type"` ab.
-- Externe Sollwert-Änderungen (App/Home Assistant) ziehen Slider/Toggle
-  automatisch nach, außer kurz nach einem eigenen Publish
-  (Echo-Unterdrückung, 10 s).
+- Es gibt kein echtes An/Aus am Novolto — `0 W` Leistungsvorgabe *ist*
+  "aus". Die Ein/Aus-Anzeige im Switch Pane ist reiner Status (`rod_st`
+  aus dem Info-Telegramm), nicht schaltbar.
+- Eingaben im Leistungsfeld werden auf das konfigurierte Watt-Raster
+  (`power_step`) gerundet und sofort published.
+- `spp` wird bewusst als Integer gesendet (20 statt 20.0) — die
+  Firmware lehnt Float mit `ret=13 "Module SENSOR: SPP -> wrong type"`
+  ab. `sptw`/`sptwh` verhalten sich umgekehrt: dort wird bewusst Float
+  gesendet (34.0 statt 34), Integer wird mit `ret=13 "wrong type"`
+  abgelehnt. Beides real per MQTT-Ack bestätigt (Stand v0.11) — jedes
+  Feld hat seinen eigenen, nicht pauschal übertragbaren Typ.
+- Externe Sollwert-Änderungen (App/Home Assistant) ziehen den
+  Leistungs-Slider automatisch nach, außer kurz nach einem eigenen
+  Publish (Echo-Unterdrückung, 10 s). Die Ein/Aus-Statusanzeige
+  aktualisiert sich unabhängig davon direkt aus `rod_st`.
 - Keine MQTT-Daten für `timeout_seconds` → Gerät geht auf "Disconnected".
 - Energiezähler wird aus der Ist-Leistung integriert und alle 5 Minuten
   nach `/data/dbus-novolto/energy.json` persistiert (übersteht Neustarts).
@@ -69,3 +79,7 @@ Log: `tail -f /var/log/dbus-novolto/current | tai64nlocal`
 - Später auf Cerbo-eigenen Broker umziehen: am Cerbo *MQTT on LAN
   (plaintext)* aktivieren, Novolto auf die Cerbo-IP zeigen lassen,
   in config.ini `host = 127.0.0.1` und Zugangsdaten leeren.
+
+## Lizenz
+
+MIT, siehe [LICENSE](LICENSE).

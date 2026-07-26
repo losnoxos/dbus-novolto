@@ -9,6 +9,8 @@ mkdir -p "$DEST"
 cp -r "$SRC/dbus-novolto.py" "$SRC/service" "$DEST/"
 [ -f "$DEST/config.ini" ] || cp "$SRC/config.ini" "$DEST/"
 chmod 755 "$DEST/dbus-novolto.py" "$DEST/service/run" "$DEST/service/log/run"
+# config.ini enthaelt ggf. ein Klartext-MQTT-Passwort -- nicht world-readable
+chmod 600 "$DEST/config.ini"
 
 echo ">> Pruefe paho-mqtt"
 python3 -c "import paho.mqtt.client" 2>/dev/null || {

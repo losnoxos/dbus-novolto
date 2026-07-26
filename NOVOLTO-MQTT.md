@@ -15,9 +15,9 @@ Ein JSON-Objekt mit allen Messwerten, zyklisch alle `msi` Sekunden.
 | `msi` | Integer | Messintervall in Sekunden | nein |
 | `avt1` | Float | Board-/Elektroniktemperatur °C | ja, optional zweiter Temp.-Service (`enable_temperature2_service`) |
 | `avtw` | Float | Ist-Wassertemperatur im Speicher °C | ja, Temperatur-Service "Novolto Speicher" |
-| `sptw` | Float | Sollwert Wassertemperatur °C (`sensor.sptw`) | ja, Feld "Max. Temperatur" |
-| `sptwh` | Float | Hysterese der Solltemperatur °C (`sensor.sptwh`) | ja, Feld "Hysterese" |
-| `spp` | Float | Sollwert Leistung W (`sensor.spp`) | ja, Feld "Leistung" |
+| `sptw` | Float lt. Doku, **beim Setzen tatsächlich Float** ⚠️ | Sollwert Wassertemperatur °C (`sensor.sptw`) | ja, Feld "Max. Temperatur" |
+| `sptwh` | Float lt. Doku, **beim Setzen tatsächlich Float** ⚠️ | Hysterese der Solltemperatur °C (`sensor.sptwh`) | ja, Feld "Hysterese" |
+| `spp` | Float lt. Doku, **beim Setzen tatsächlich Integer** ⚠️ | Sollwert Leistung W (`sensor.spp`) | ja, Feld "Leistung" |
 | `avv` | Float | Spannung V, Mittelwert über 5 s | ja, `/Ac/<Phase>/Voltage` |
 | `avp` | Float | Ist-Leistung W, Mittelwert über 5 s | ja, `/Ac/Power`, Energiezähler, Anzeige im Feldnamen |
 | `avi` | Float | Strom A, Mittelwert über 5 s | ja, `/Ac/<Phase>/Current` |
@@ -25,7 +25,19 @@ Ein JSON-Objekt mit allen Messwerten, zyklisch alle `msi` Sekunden.
 | `rssi` | Integer | WLAN-Signalstärke | nein — Diagnosewert, aktuell nicht angezeigt |
 | `st` | Integer | Bitflags Warnungen/Fehler, siehe unten | nein — aktuell nicht ausgewertet |
 | `wel` | Float | Energie seit Geräte-Boot, kWh, **Schätzwert** | optional über `energy_source = wel` |
-| `rod_st`, `triacon`, `r1on`, `r2on` | — | laut Hersteller "miscellaneous diagnostic data", nicht weiter dokumentiert | nein |
+| `rod_st` | Integer | 0/1, ob der Heizstab **real gerade heizt** (real getestet, siehe unten) | ja, Ein/Aus-Statusanzeige (read-only) |
+| `triacon`, `r1on`, `r2on` | — | laut Hersteller "miscellaneous diagnostic data", nicht weiter dokumentiert | nein |
+
+⚠️ Die Typ-Spalte ist die von Novolto dokumentierte Bedeutung im
+Info-Telegramm — welcher JSON-Typ beim **Setzen** über `<topic_control>`
+tatsächlich akzeptiert wird, weicht bei `spp`/`sptw`/`sptwh` davon ab,
+siehe "Real-World-Erkenntnis" weiter unten.
+
+**`rod_st` real verifiziert (nicht in der Novolto-Doku enthalten):** per Vergleich
+von Info-Telegrammen im Leerlauf (`rod_st:0`, `avp:2.7 W`) und beim Heizen
+(`rod_st:1`, `avp:131 W`) eindeutig bestätigt. `triacon` ist dagegen ein reiner
+Zähler (steigt monoton, auch wenn `rod_st` wieder 0 ist) und taugt nicht als
+Statusfeld.
 
 **Wichtig zu `wel`:** Der Wert wird laut Hersteller seit dem letzten Geräte-Neustart
 integriert und ist ein Schätzwert — er springt bei einem Reboot des Novolto auf 0
@@ -96,6 +108,19 @@ prüft.
 | SENSOR | `sptwh` | float | Hysterese °C — Heizstab schaltet **aus** oberhalb `sptw + sptwh/2`, **ein** unterhalb `sptw - sptwh/2` |
 | SENSOR | `spp` | float | Sollwert Leistung W (Annahme 230 V, reale Leistung kann abweichen) |
 
+**Real-World-Erkenntnis (v0.11):** Die Novolto-Doku nennt `spp`/`sptw`/
+`sptwh` einheitlich als Typ `float` — real (per MQTT-Ack auf unserem
+Gerätestand) verhält sich aber jedes Feld anders:
+
+- `spp` verlangt **Integer** (`20` statt `20.0`) — Float wird mit
+  `ret=13 "Module SENSOR: SPP -> wrong type"` abgelehnt.
+- `sptw`/`sptwh` verlangen **Float** (`34.0` statt `34`) — Integer wird
+  mit `ret=13 "Module SENSOR: SPTWH -> wrong type"` abgelehnt.
+
+dbus-novolto sendet dementsprechend `spp` als Integer, `sptw`/`sptwh`
+als Float. Nicht pauschal auf weitere Settings übertragen, ohne es
+einzeln per Ack zu verifizieren.
+
 Eine vollständige Liste aller Settings liefert das Entwickler-Menü im
 Novolto-Web-Config.
 
@@ -106,5 +131,6 @@ Novolto-Web-Config.
 - `ret`/`s_err`-Quittungen auswerten und bei Fehlern loggen, statt sie
   stillschweigend zu verwerfen
 - `rssi` als Diagnoseinfo anzeigen (z.B. an `/Mgmt/Connection` anhängen)
-- `rod_st`, `triacon`, `r1on`, `r2on` bleiben ungenutzt, da herstellerseitig
-  nicht im Detail dokumentiert
+- `triacon`, `r1on`, `r2on` bleiben ungenutzt, da herstellerseitig nicht
+  im Detail dokumentiert und (bei `triacon`) als reiner Zähler ungeeignet
+  fürs Switch Pane

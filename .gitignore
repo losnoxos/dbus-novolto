@@ -4,6 +4,9 @@ _dbus-novolto Deckblatt.md
 # Echte Zugangsdaten -- nur config.ini.example wird versioniert
 config.ini
 
+# Enthaelt private LAN-IP, nur lokales Deploy-Werkzeug
+deploy-to-cerbo.bat
+
 # Laufzeit-/Zählerstand vom Cerbo GX, kein Quellcode
 energy.json
 

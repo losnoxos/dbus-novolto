@@ -1,15 +1,57 @@
 #!/usr/bin/env python3
 """
-dbus-novolto v0.8
-=================
+dbus-novolto v0.13
+===================
 Venus OS Treiber fuer den Novolto Heizstab via lokalem MQTT.
 
 Aenderungen:
+  v0.13 Ergebnisse eines Code-Reviews vor Oeffentlichmachung behoben:
+        - Fehlerhafte/boesartige Info-Telegramme (falscher Typ, NaN)
+          liessen den Treiber crashen -- bei retained MQTT-Nachrichten
+          ein permanenter Crash-Loop. _update() faengt das jetzt ab.
+        - NaN/Infinity in avp haette den Energiezaehler dauerhaft und
+          persistent korrumpiert -- wird jetzt verworfen.
+        - Leistungs-Rasterung konnte ueber max_power hinausrunden
+          (z.B. max_power kein Vielfaches von power_step) -- erneutes
+          Clamping nach der Rasterung ergaenzt.
+        - Watchdog (Verbindung verloren) setzte Heizstatus, Sollwert
+          und Temperatur-Sollwerte nicht zurueck -- GUI haette veraltete
+          Werte als aktuell angezeigt. Jetzt werden auch rod_st-Status,
+          Dimming-Werte und dynamische CustomNames invalidiert.
+        - power_step=0 in config.ini haette ZeroDivisionError ausgeloest
+          -- jetzt auf min. 1 geklemmt.
+        - Fehlende Pflichtfelder in config.ini (host/base_topic/Sections)
+          gaben kryptische Tracebacks statt klarer Fehlermeldung.
+        - SIGTERM (Service-Stop/Reboot) beendete den Prozess ohne
+          Energiezaehler-Persistierung -- jetzt sauberes mainloop.quit().
+        - config.ini (Klartext-Passwort) wird von install.sh jetzt 600
+          statt world-readable angelegt.
+  v0.12 Heizstab-Schalter (SwitchableOutput/0) ist jetzt read-only und
+        zeigt den echten Heizstatus aus rod_st (0/1), statt spp>0 als
+        Annaeherung zu nehmen. Der Novolto kennt kein echtes An/Aus --
+        Steuerung laeuft ausschliesslich ueber das Leistungsfeld (0 W =
+        aus). switch_state/setpoint_memory entfallen dadurch komplett;
+        _on_dimming_changed published jetzt immer direkt.
+  v0.11 Korrektur zu v0.10: Der Typwechsel gilt NUR fuer spp, nicht fuer
+        sptw/sptwh -- die brauchen weiterhin Float (ret=13 "Module
+        SENSOR: SPTWH -> wrong type" bei Integer, per MQTT-Ack
+        bestaetigt). Jedes der drei Felder hat also einen eigenen,
+        empirisch bestaetigten Typ -- nicht pauschal uebertragbar.
+  v0.10 Fix: spp wird als Integer statt Float published (20 statt
+        20.0). Die v0.7-Annahme war falsch bzw. firmwareabhaengig
+        veraltet -- real bestaetigt per MQTT-Ack: die Firmware lehnt
+        FLOAT-Werte fuer SPP mit ret=13 "wrong type" ab. Dadurch wurde
+        die Leistungsvorgabe nie tatsaechlich uebernommen (Schalter
+        sprang nach der 10s-Echo-Unterdrueckung wieder zurueck).
+  v0.9  Feste Reihenfolge der Switch-Pane-Felder (Heizstab, Leistung,
+        Max. Temperatur, Hysterese) erzwungen. Venus OS sortiert die
+        Eintraege alphabetisch nach CustomName, nicht nach Index --
+        daher Ziffern-Praefix (1..4) in den Namen.
   v0.8  Hysterese der Wassertemperatur (sptwh) als einstellbares Feld
         im Switch Pane (enable_sptwh_control).
-  v0.7  Fix: sptw und spp werden als Float published (34.0 statt 34).
-        Die Firmware lehnt Integer-Werte mit ret=13 "wrong type" ab,
-        wodurch der Sollwert nicht uebernommen wurde.
+  v0.7  (veraltet/falsifiziert, siehe v0.10) Sollte sptw/spp als Float
+        published haben (34.0 statt 34), da vermutet wurde, die
+        Firmware lehne Integer-Werte mit ret=13 "wrong type" ab.
   v0.6  Max. Wassertemperatur (sptw) als einstellbares Feld im Switch
         Pane (enable_sptw_control). Phase (L1/L2/L3) und Position
         (AC-In/Out) konfigurierbar. Optionaler zweiter Temperatursensor
@@ -25,7 +67,7 @@ Aenderungen:
         avp als Ist-Leistung, private dbus-Verbindung pro Service.
 
 Der Novolto publiziert ein JSON-Telegramm auf <serial>/info, z.B.:
-  {"serial":"130.140.1D0978","unix_time":...,"msi":5,"avt1":35.48,
+  {"serial":"XXX.XXX.XXXXXX","unix_time":...,"msi":5,"avt1":35.48,
    "avtw":25.50,"spp":0,"sptw":33.00,"sptwh":5.00,"st":0,"rod_st":0,
    "triacon":4,"r1on":0,"r2on":0,"avv":231.99,"avi":0.01,"avp":2.66,
    "avf":50.00,"wel":0.00,"rssi":0}
@@ -42,7 +84,8 @@ Feldnutzung (vollstaendige Referenz: NOVOLTO-MQTT.md):
   sptwh -> Hysterese Wassertemperatur (Anzeige Slider-Rueckmeldung)
   wel   -> Energiezaehler des Geraets (Schaetzwert seit Geraete-Boot,
            nicht persistent), alternativ zur eigenen Integration aus avp
-  rssi, st, rod_st, triacon, r1on, r2on -> aktuell nicht ausgewertet
+  rod_st -> Heizstab-Status (0/1), read-only SwitchableOutput/0/State
+  rssi, st, triacon, r1on, r2on -> aktuell nicht ausgewertet
 
 Registriert:
   - com.victronenergy.acload.novolto (+ SwitchableOutput 0-3: Ein/Aus,
@@ -54,6 +97,8 @@ Registriert:
 import sys
 import os
 import json
+import math
+import signal
 import time
 import logging
 import configparser
@@ -89,22 +134,33 @@ class Config:
         cp = configparser.ConfigParser()
         if not cp.read(path):
             raise SystemExit("config.ini nicht gefunden: %s" % path)
-        m = cp["mqtt"]
-        self.host = m.get("host")
+        try:
+            m = cp["mqtt"]
+        except KeyError:
+            raise SystemExit("config.ini: Abschnitt [mqtt] fehlt")
+        self.host = m.get("host", fallback="")
+        if not self.host:
+            raise SystemExit("config.ini: [mqtt] host fehlt")
         self.port = m.getint("port", 1883)
         self.user = m.get("username", fallback="") or None
         self.password = m.get("password", fallback="") or None
-        self.base = m.get("base_topic").rstrip("/")
+        base_topic = m.get("base_topic", fallback="")
+        if not base_topic:
+            raise SystemExit("config.ini: [mqtt] base_topic fehlt")
+        self.base = base_topic.rstrip("/")
         self.t_info = m.get("topic_info", "info")
         self.t_control = m.get("topic_control", "control")
         self.ctrl_sensor_name = m.get("control_sensor_name", "spp")
 
-        d = cp["device"]
+        try:
+            d = cp["device"]
+        except KeyError:
+            raise SystemExit("config.ini: Abschnitt [device] fehlt")
         self.name = d.get("name", "Novolto Heizstab")
         self.instance_acload = d.getint("deviceinstance_acload", 40)
         self.instance_temp = d.getint("deviceinstance_temperature", 41)
         self.max_power = d.getint("max_power", 3000)
-        self.step = d.getint("power_step", 20)
+        self.step = max(1, d.getint("power_step", 20))
         self.timeout = d.getint("timeout_seconds", 120)
         self.enable_temp = d.getboolean("enable_temperature_service", True)
         self.resend_seconds = d.getint("resend_setpoint_seconds", 0)
@@ -177,9 +233,8 @@ class NovoltoDriver:
         self.cfg = cfg
         self.energy = EnergyCounter()
         self.last_msg = 0.0
-        self.switch_state = 0
+        self.heating = False
         self.setpoint = 0
-        self.setpoint_memory = 0
         self._last_name_temp = None
         self._last_name_power = None
         self.sptw = None
@@ -213,7 +268,7 @@ class NovoltoDriver:
         self.svc = s
 
         s.add_path("/Mgmt/ProcessName", "dbus-novolto")
-        s.add_path("/Mgmt/ProcessVersion", "0.8")
+        s.add_path("/Mgmt/ProcessVersion", "0.13")
         s.add_path("/Mgmt/Connection", "MQTT %s:%d" % (cfg.host, cfg.port))
         s.add_path("/DeviceInstance", cfg.instance_acload)
         s.add_path("/ProductId", 0xFFFF)
@@ -238,9 +293,10 @@ class NovoltoDriver:
         p = "/SwitchableOutput/0/"
         s.add_path(p + "Name", "Heizstab")
         s.add_path(p + "Status", 0)
-        s.add_path(p + "State", 0, writeable=True,
-                   onchangecallback=self._on_state_changed)
-        s.add_path(p + "Settings/CustomName", "Heizstab Ein/Aus",
+        # Read-only Statusanzeige (aus rod_st) -- kein echtes An/Aus am
+        # Novolto, siehe Feldnutzung im Docstring.
+        s.add_path(p + "State", 0)
+        s.add_path(p + "Settings/CustomName", "1 Heizstab Ein/Aus",
                    writeable=True)
         s.add_path(p + "Settings/Group", "Novolto", writeable=True)
         s.add_path(p + "Settings/Type", TYPE_TOGGLE, writeable=True)
@@ -253,7 +309,7 @@ class NovoltoDriver:
         s.add_path(p + "State", 1, writeable=True)
         s.add_path(p + "Dimming", 0, writeable=True,
                    onchangecallback=self._on_dimming_changed)
-        s.add_path(p + "Settings/CustomName", "Heizstab Leistung",
+        s.add_path(p + "Settings/CustomName", "2 Heizstab Leistung",
                    writeable=True)
         s.add_path(p + "Settings/Group", "Novolto", writeable=True)
         s.add_path(p + "Settings/Type", TYPE_NUMERIC_INPUT, writeable=True)
@@ -273,7 +329,7 @@ class NovoltoDriver:
             s.add_path(p + "State", 1, writeable=True)
             s.add_path(p + "Dimming", None, writeable=True,
                        onchangecallback=self._on_sptw_changed)
-            s.add_path(p + "Settings/CustomName", "Max. Wassertemperatur",
+            s.add_path(p + "Settings/CustomName", "3 Max. Wassertemperatur",
                        writeable=True)
             s.add_path(p + "Settings/Group", "Novolto", writeable=True)
             s.add_path(p + "Settings/Type", TYPE_NUMERIC_INPUT,
@@ -293,7 +349,7 @@ class NovoltoDriver:
             s.add_path(p + "State", 1, writeable=True)
             s.add_path(p + "Dimming", None, writeable=True,
                        onchangecallback=self._on_sptwh_changed)
-            s.add_path(p + "Settings/CustomName", "Hysterese Wassertemperatur",
+            s.add_path(p + "Settings/CustomName", "4 Hysterese Wassertemperatur",
                        writeable=True)
             s.add_path(p + "Settings/Group", "Novolto", writeable=True)
             s.add_path(p + "Settings/Type", TYPE_NUMERIC_INPUT,
@@ -316,7 +372,7 @@ class NovoltoDriver:
         if cfg.enable_temp:
             t = make_service("com.victronenergy.temperature.novolto")
             t.add_path("/Mgmt/ProcessName", "dbus-novolto")
-            t.add_path("/Mgmt/ProcessVersion", "0.8")
+            t.add_path("/Mgmt/ProcessVersion", "0.13")
             t.add_path("/Mgmt/Connection", "MQTT %s:%d" % (cfg.host, cfg.port))
             t.add_path("/DeviceInstance", cfg.instance_temp)
             t.add_path("/ProductId", 0xFFFF)
@@ -338,7 +394,7 @@ class NovoltoDriver:
         if cfg.enable_temp2:
             t2 = make_service("com.victronenergy.temperature.novolto2")
             t2.add_path("/Mgmt/ProcessName", "dbus-novolto")
-            t2.add_path("/Mgmt/ProcessVersion", "0.8")
+            t2.add_path("/Mgmt/ProcessVersion", "0.13")
             t2.add_path("/Mgmt/Connection",
                         "MQTT %s:%d" % (cfg.host, cfg.port))
             t2.add_path("/DeviceInstance", cfg.instance_temp2)
@@ -363,25 +419,6 @@ class NovoltoDriver:
         return lambda path, value: fmt % value
 
     # ------------------------------------------------------ dbus callbacks
-    def _on_state_changed(self, path, value):
-        value = int(value)
-        if value not in (0, 1):
-            return False
-        self.switch_state = value
-        self.svc["/SwitchableOutput/0/Status"] = 9 if value else 0
-        if value:
-            sp = self.setpoint_memory if self.setpoint_memory > 0 \
-                else self.cfg.step
-            self.setpoint = sp
-            self.svc["/SwitchableOutput/1/Dimming"] = sp
-            self._publish_setpoint(sp)
-        else:
-            self.setpoint = 0
-            self.svc["/SwitchableOutput/1/Dimming"] = 0
-            self._publish_setpoint(0)
-        log.info("Schalter -> %s", "EIN" if value else "AUS")
-        return True
-
     def _on_dimming_changed(self, path, value):
         try:
             value = int(round(float(value)))
@@ -389,18 +426,12 @@ class NovoltoDriver:
             return False
         value = max(0, min(self.cfg.max_power, value))
         value = int(round(value / self.cfg.step)) * self.cfg.step
+        # Rasterung kann ueber max_power hinausrunden (z.B. max_power kein
+        # Vielfaches von power_step) -- danach erneut clampen.
+        value = max(0, min(self.cfg.max_power, value))
         self.setpoint = value
-        if value > 0:
-            self.setpoint_memory = value
-        if self.switch_state:
-            self._publish_setpoint(value)
-            if value == 0:
-                self.switch_state = 0
-                self.svc["/SwitchableOutput/0/State"] = 0
-                self.svc["/SwitchableOutput/0/Status"] = 0
-        log.info("Sollwert -> %d W%s", value,
-                 "" if self.switch_state or value == 0
-                 else " (Schalter aus, vorgemerkt)")
+        self._publish_setpoint(value)
+        log.info("Sollwert -> %d W", value)
         return True
 
     def _on_sptw_changed(self, path, value):
@@ -410,8 +441,8 @@ class NovoltoDriver:
             return False
         value = max(self.cfg.sptw_min, min(self.cfg.sptw_max, value))
         self.sptw = value
-        # Firmware verlangt Float ("Module SENSOR: SPTW -> wrong type"
-        # bei Integer, ret=13) -> immer mit Dezimalstelle senden (34.0)
+        # Anders als spp (siehe _publish_setpoint) verlangt sptw Float --
+        # ret=13 "wrong type" bei Integer, per MQTT-Ack bestaetigt.
         payload = json.dumps(
             {"sensor": [{"name": "sptw", "value": float(value)}]})
         t = "%s/%s" % (self.cfg.base, self.cfg.t_control)
@@ -427,7 +458,8 @@ class NovoltoDriver:
             return False
         value = max(self.cfg.sptwh_min, min(self.cfg.sptwh_max, value))
         self.sptwh = value
-        # Firmware verlangt Float, siehe _on_sptw_changed
+        # Verlangt Float, siehe _on_sptw_changed -- bestaetigt per
+        # ret=13 "Module SENSOR: SPTWH -> wrong type" bei Integer.
         payload = json.dumps(
             {"sensor": [{"name": "sptwh", "value": float(value)}]})
         t = "%s/%s" % (self.cfg.base, self.cfg.t_control)
@@ -465,17 +497,21 @@ class NovoltoDriver:
 
     def _on_message(self, client, userdata, msg):
         try:
-            data = json.loads(msg.payload.decode("utf-8", errors="ignore"))
-        except ValueError:
-            log.warning("Kein JSON auf %s: %r", msg.topic, msg.payload[:120])
+            payload = msg.payload.decode("utf-8")
+            data = json.loads(payload)
+        except (UnicodeDecodeError, ValueError):
+            log.warning("Kein gueltiges JSON auf %s: %r",
+                        msg.topic, msg.payload[:120])
             return
         if isinstance(data, dict):
             GLib.idle_add(self._update, data)
 
     def _publish_setpoint(self, watts):
+        # Firmware verlangt Integer ("Module SENSOR: SPP -> wrong type"
+        # bei Float, ret=13)
         payload = json.dumps(
             {"sensor": [{"name": self.cfg.ctrl_sensor_name,
-                         "value": float(int(watts))}]})
+                         "value": int(watts)}]})
         t = "%s/%s" % (self.cfg.base, self.cfg.t_control)
         self.mqtt.publish(t, payload)
         self._suppress_echo = time.monotonic() + 10
@@ -483,6 +519,16 @@ class NovoltoDriver:
 
     # ------------------------------------------------- GLib thread context
     def _update(self, d):
+        # Ein fehlerhaftes/boesartiges Telegramm (falscher Typ, NaN, ...)
+        # darf den Treiber nicht abschiessen -- sonst Crash-Loop, falls der
+        # Broker die kaputte Nachricht retained.
+        try:
+            self._update_unsafe(d)
+        except (TypeError, ValueError, KeyError) as e:
+            log.warning("Fehlerhaftes Info-Telegramm ignoriert: %s", e)
+        return False
+
+    def _update_unsafe(self, d):
         self.last_msg = time.monotonic()
         s = self.svc
         s["/Connected"] = 1
@@ -490,6 +536,8 @@ class NovoltoDriver:
         power = d.get("avp")
         if power is not None:
             power = float(power)
+            if not math.isfinite(power):
+                raise ValueError("avp ist NaN/Infinity: %r" % d.get("avp"))
             self.energy.update(power)
             s["/Ac/Power"] = power
             s["/Ac/%s/Power" % self.cfg.phase] = power
@@ -498,7 +546,7 @@ class NovoltoDriver:
                 if shown != self._last_name_power:
                     self._last_name_power = shown
                     s["/SwitchableOutput/1/Settings/CustomName"] = \
-                        "Leistung · Ist: %d W" % shown
+                        "2 Leistung · Ist: %d W" % shown
         if "avv" in d:
             s["/Ac/%s/Voltage" % self.cfg.phase] = float(d["avv"])
         if "avi" in d:
@@ -511,30 +559,24 @@ class NovoltoDriver:
         else:
             s["/Ac/Energy/Forward"] = round(self.energy.kwh, 3)
 
-        # Sollwert-Rueckmeldung vom Geraet -> Slider/Toggle synchron halten,
+        # Sollwert-Rueckmeldung vom Geraet -> Slider synchron halten,
         # ausser wir haben gerade selbst gesendet (Echo-Unterdrueckung)
         if "spp" in d and time.monotonic() > self._suppress_echo:
             spp = int(float(d["spp"]))
-            if spp > 0:
-                # extern gesetzter Sollwert (App/HA) -> GUI nachziehen
-                self.setpoint_memory = spp
-                if spp != self.setpoint:
-                    self.setpoint = spp
-                    s["/SwitchableOutput/1/Dimming"] = spp
-                if self.switch_state != 1:
-                    self.switch_state = 1
-                    s["/SwitchableOutput/0/State"] = 1
-                    s["/SwitchableOutput/0/Status"] = 9
-            else:
-                # Stab aus -> Toggle und Anzeige auf 0,
-                # letzter Wert bleibt im Gedaechtnis fuer Wiedereinschalten
-                if self.switch_state != 0:
-                    self.switch_state = 0
-                    s["/SwitchableOutput/0/State"] = 0
-                    s["/SwitchableOutput/0/Status"] = 0
-                if self.setpoint != 0:
-                    self.setpoint = 0
-                    s["/SwitchableOutput/1/Dimming"] = 0
+            if spp != self.setpoint:
+                self.setpoint = spp
+                s["/SwitchableOutput/1/Dimming"] = spp
+
+        # rod_st ist die einzige direkte Statusangabe des Geraets, ob
+        # gerade tatsaechlich geheizt wird (0/1) -- unabhaengig vom
+        # Sollwert, da der Stab bei Erreichen von sptw von selbst abschaltet.
+        if "rod_st" in d:
+            heating = bool(int(d["rod_st"]))
+            if heating != self.heating:
+                self.heating = heating
+                s["/SwitchableOutput/0/State"] = 1 if heating else 0
+                s["/SwitchableOutput/0/Status"] = 9 if heating else 0
+                log.info("Heizt -> %s", "JA" if heating else "NEIN")
 
         if self.cfg.enable_sptw and "sptw" in d \
                 and time.monotonic() > self._suppress_sptw:
@@ -562,8 +604,7 @@ class NovoltoDriver:
             if self.cfg.show_temp_in_switch and temp != self._last_name_temp:
                 self._last_name_temp = temp
                 s["/SwitchableOutput/0/Settings/CustomName"] = \
-                    "Heizstab · %.1f °C" % temp
-        return False
+                    "1 Heizstab · %.1f °C" % temp
 
     def _watchdog(self):
         if self.last_msg and \
@@ -575,6 +616,32 @@ class NovoltoDriver:
             for ph in ("L1", "L2", "L3"):
                 for k in ("Power", "Voltage", "Current"):
                     s["/Ac/%s/%s" % (ph, k)] = None
+
+            if self.heating:
+                self.heating = False
+                s["/SwitchableOutput/0/Status"] = 0
+            s["/SwitchableOutput/0/State"] = 0
+            if self.cfg.show_temp_in_switch and \
+                    self._last_name_temp is not None:
+                self._last_name_temp = None
+                s["/SwitchableOutput/0/Settings/CustomName"] = \
+                    "1 Heizstab (getrennt)"
+
+            self.setpoint = None
+            s["/SwitchableOutput/1/Dimming"] = None
+            if self.cfg.show_power_in_switch and \
+                    self._last_name_power is not None:
+                self._last_name_power = None
+                s["/SwitchableOutput/1/Settings/CustomName"] = \
+                    "2 Leistung (getrennt)"
+
+            if self.cfg.enable_sptw:
+                self.sptw = None
+                s["/SwitchableOutput/2/Dimming"] = None
+            if self.cfg.enable_sptwh:
+                self.sptwh = None
+                s["/SwitchableOutput/3/Dimming"] = None
+
             if self.tsvc:
                 self.tsvc["/Connected"] = 0
                 self.tsvc["/Temperature"] = None
@@ -584,7 +651,9 @@ class NovoltoDriver:
         return True
 
     def _resend(self):
-        if self.switch_state and self.setpoint > 0:
+        # self.setpoint kann None sein, wenn der Watchdog wegen Timeout
+        # zurueckgesetzt hat.
+        if self.setpoint and self.setpoint > 0:
             self._publish_setpoint(self.setpoint)
         return True
 
@@ -597,6 +666,10 @@ def main():
     driver = NovoltoDriver(cfg)
     log.info("dbus-novolto gestartet, base_topic=%s", cfg.base)
     mainloop = GLib.MainLoop()
+    # SIGTERM (daemontools "svc -d"/-t, Reboot) terminiert Python sonst
+    # sofort ohne finally -- dadurch ginge der Energiezaehler-Puffer
+    # zwischen den 5-Minuten-Persist-Intervallen verloren.
+    signal.signal(signal.SIGTERM, lambda signum, frame: mainloop.quit())
     try:
         mainloop.run()
     finally:
