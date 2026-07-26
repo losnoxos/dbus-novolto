@@ -1,0 +1,20 @@
+# Obsidian-Notiz bleibt lokal, wird nicht auf GitHub veröffentlicht
+_dbus-adapter Deckblatt.md
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Node
+node_modules/
+
+# Secrets/Config
+.env
