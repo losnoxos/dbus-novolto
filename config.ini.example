@@ -26,8 +26,9 @@ timeout_seconds = 120
 enable_temperature_service = true
 ; Sollwert zyklisch wiederholen in Sekunden (0 = aus)
 resend_setpoint_seconds = 0
-; Energiezaehler: "integrate" (aus avp integriert, persistent) oder
-; "wel" (Zaehler des Geraets, sobald dessen Einheit/Verhalten geklaert ist)
+; Energiezaehler: "integrate" (aus avp integriert, persistent ueber
+; Neustarts) oder "wel" (Zaehler des Geraets -- laut Novolto-Doku ein
+; Schaetzwert seit Geraete-Boot, springt bei dessen Neustart auf 0 zurueck)
 energy_source = integrate
 ; Ist-Werte live in den Schalternamen im Switch Pane schreiben
 show_temp_in_switch = true
@@ -40,6 +41,10 @@ position = ac_in
 enable_sptw_control = true
 sptw_min = 20
 sptw_max = 75
+; Hysterese der Wassertemperatur (sptwh) als einstellbares Feld im Switch Pane
+enable_sptwh_control = true
+sptwh_min = 1
+sptwh_max = 20
 ; Zweiter Temperatursensor fuer avt1 (Elektronik-/Stabtemperatur)
 enable_temperature2_service = false
 deviceinstance_temperature2 = 42

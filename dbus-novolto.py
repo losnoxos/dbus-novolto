@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-dbus-novolto v0.7
+dbus-novolto v0.8
 =================
 Venus OS Treiber fuer den Novolto Heizstab via lokalem MQTT.
 
 Aenderungen:
+  v0.8  Hysterese der Wassertemperatur (sptwh) als einstellbares Feld
+        im Switch Pane (enable_sptwh_control).
   v0.7  Fix: sptw und spp werden als Float published (34.0 statt 34).
         Die Firmware lehnt Integer-Werte mit ret=13 "wrong type" ab,
         wodurch der Sollwert nicht uebernommen wurde.
@@ -28,17 +30,25 @@ Der Novolto publiziert ein JSON-Telegramm auf <serial>/info, z.B.:
    "triacon":4,"r1on":0,"r2on":0,"avv":231.99,"avi":0.01,"avp":2.66,
    "avf":50.00,"wel":0.00,"rssi":0}
 
-Feldnutzung:
-  avp  -> /Ac/Power (gemessene Ist-Leistung)
-  avv  -> /Ac/L1/Voltage
-  avi  -> /Ac/L1/Current
-  avtw -> Temperatur-Service (Speicher)
-  spp  -> aktueller Sollwert (Anzeige Slider-Rueckmeldung)
-  wel  -> Energiezaehler des Geraets (falls nutzbar), sonst Integration
+Feldnutzung (vollstaendige Referenz: NOVOLTO-MQTT.md):
+  avp   -> /Ac/Power (gemessene Ist-Leistung)
+  avv   -> /Ac/L1/Voltage
+  avi   -> /Ac/L1/Current
+  avf   -> /Ac/Frequency
+  avtw  -> Temperatur-Service (Speicher)
+  avt1  -> optionaler zweiter Temperatur-Service (Elektronik)
+  spp   -> aktueller Sollwert Leistung (Anzeige Slider-Rueckmeldung)
+  sptw  -> Sollwert Wassertemperatur (Anzeige Slider-Rueckmeldung)
+  sptwh -> Hysterese Wassertemperatur (Anzeige Slider-Rueckmeldung)
+  wel   -> Energiezaehler des Geraets (Schaetzwert seit Geraete-Boot,
+           nicht persistent), alternativ zur eigenen Integration aus avp
+  rssi, st, rod_st, triacon, r1on, r2on -> aktuell nicht ausgewertet
 
 Registriert:
-  - com.victronenergy.acload.novolto (+ SwitchableOutput 0/1)
+  - com.victronenergy.acload.novolto (+ SwitchableOutput 0-3: Ein/Aus,
+    Leistung, Max. Temperatur, Hysterese)
   - com.victronenergy.temperature.novolto (optional)
+  - com.victronenergy.temperature.novolto2 (optional, avt1)
 """
 
 import sys
@@ -114,6 +124,10 @@ class Config:
             "enable_sptw_control", fallback=True)
         self.sptw_min = d.getint("sptw_min", fallback=20)
         self.sptw_max = d.getint("sptw_max", fallback=75)
+        self.enable_sptwh = d.getboolean(
+            "enable_sptwh_control", fallback=True)
+        self.sptwh_min = d.getint("sptwh_min", fallback=1)
+        self.sptwh_max = d.getint("sptwh_max", fallback=20)
         self.enable_temp2 = d.getboolean(
             "enable_temperature2_service", fallback=False)
         self.instance_temp2 = d.getint(
@@ -170,6 +184,8 @@ class NovoltoDriver:
         self._last_name_power = None
         self.sptw = None
         self._suppress_sptw = 0.0
+        self.sptwh = None
+        self._suppress_sptwh = 0.0
         self._suppress_echo = 0.0
 
         self._init_dbus()
@@ -197,7 +213,7 @@ class NovoltoDriver:
         self.svc = s
 
         s.add_path("/Mgmt/ProcessName", "dbus-novolto")
-        s.add_path("/Mgmt/ProcessVersion", "0.7")
+        s.add_path("/Mgmt/ProcessVersion", "0.8")
         s.add_path("/Mgmt/Connection", "MQTT %s:%d" % (cfg.host, cfg.port))
         s.add_path("/DeviceInstance", cfg.instance_acload)
         s.add_path("/ProductId", 0xFFFF)
@@ -270,6 +286,26 @@ class NovoltoDriver:
             s.add_path(p + "Settings/Unit", "°C")
             s.add_path(p + "Settings/ShowUIControl", 1, writeable=True)
 
+        if cfg.enable_sptwh:
+            p = "/SwitchableOutput/3/"
+            s.add_path(p + "Name", "Hysterese")
+            s.add_path(p + "Status", 0)
+            s.add_path(p + "State", 1, writeable=True)
+            s.add_path(p + "Dimming", None, writeable=True,
+                       onchangecallback=self._on_sptwh_changed)
+            s.add_path(p + "Settings/CustomName", "Hysterese Wassertemperatur",
+                       writeable=True)
+            s.add_path(p + "Settings/Group", "Novolto", writeable=True)
+            s.add_path(p + "Settings/Type", TYPE_NUMERIC_INPUT,
+                       writeable=True)
+            s.add_path(p + "Settings/ValidTypes", 1 << TYPE_NUMERIC_INPUT)
+            s.add_path(p + "Settings/DimmingMin", cfg.sptwh_min)
+            s.add_path(p + "Settings/DimmingMax", cfg.sptwh_max)
+            s.add_path(p + "Settings/StepSize", 1)
+            s.add_path(p + "Settings/Decimals", 0)
+            s.add_path(p + "Settings/Unit", "°C")
+            s.add_path(p + "Settings/ShowUIControl", 1, writeable=True)
+
         if hasattr(s, "register"):
             try:
                 s.register()
@@ -280,7 +316,7 @@ class NovoltoDriver:
         if cfg.enable_temp:
             t = make_service("com.victronenergy.temperature.novolto")
             t.add_path("/Mgmt/ProcessName", "dbus-novolto")
-            t.add_path("/Mgmt/ProcessVersion", "0.7")
+            t.add_path("/Mgmt/ProcessVersion", "0.8")
             t.add_path("/Mgmt/Connection", "MQTT %s:%d" % (cfg.host, cfg.port))
             t.add_path("/DeviceInstance", cfg.instance_temp)
             t.add_path("/ProductId", 0xFFFF)
@@ -302,7 +338,7 @@ class NovoltoDriver:
         if cfg.enable_temp2:
             t2 = make_service("com.victronenergy.temperature.novolto2")
             t2.add_path("/Mgmt/ProcessName", "dbus-novolto")
-            t2.add_path("/Mgmt/ProcessVersion", "0.7")
+            t2.add_path("/Mgmt/ProcessVersion", "0.8")
             t2.add_path("/Mgmt/Connection",
                         "MQTT %s:%d" % (cfg.host, cfg.port))
             t2.add_path("/DeviceInstance", cfg.instance_temp2)
@@ -382,6 +418,22 @@ class NovoltoDriver:
         self.mqtt.publish(t, payload)
         self._suppress_sptw = time.monotonic() + 10
         log.info("Max. Wassertemperatur -> %d C (publish %s)", value, t)
+        return True
+
+    def _on_sptwh_changed(self, path, value):
+        try:
+            value = int(round(float(value)))
+        except (TypeError, ValueError):
+            return False
+        value = max(self.cfg.sptwh_min, min(self.cfg.sptwh_max, value))
+        self.sptwh = value
+        # Firmware verlangt Float, siehe _on_sptw_changed
+        payload = json.dumps(
+            {"sensor": [{"name": "sptwh", "value": float(value)}]})
+        t = "%s/%s" % (self.cfg.base, self.cfg.t_control)
+        self.mqtt.publish(t, payload)
+        self._suppress_sptwh = time.monotonic() + 10
+        log.info("Hysterese -> %d C (publish %s)", value, t)
         return True
 
     # ------------------------------------------------------------------ mqtt
@@ -490,6 +542,13 @@ class NovoltoDriver:
             if sptw != self.sptw:
                 self.sptw = sptw
                 s["/SwitchableOutput/2/Dimming"] = sptw
+
+        if self.cfg.enable_sptwh and "sptwh" in d \
+                and time.monotonic() > self._suppress_sptwh:
+            sptwh = int(float(d["sptwh"]))
+            if sptwh != self.sptwh:
+                self.sptwh = sptwh
+                s["/SwitchableOutput/3/Dimming"] = sptwh
 
         if self.t2svc and "avt1" in d:
             self.t2svc["/Connected"] = 1
