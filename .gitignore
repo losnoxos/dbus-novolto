@@ -4,24 +4,9 @@ _dbus-novolto Deckblatt.md
 # Echte Zugangsdaten -- nur config.ini.example wird versioniert
 config.ini
 
-# Enthaelt private LAN-IP, nur lokales Deploy-Werkzeug
-deploy-to-cerbo.bat
-
 # Laufzeit-/Zählerstand vom Cerbo GX, kein Quellcode
 energy.json
 
-# daemontools Laufzeit-Status (wird automatisch neu erzeugt)
-service/supervise/
-service/log/supervise/
-
-# OS
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# Python
+# entsteht lokal beim Syntax-Check (python -m py_compile)
 __pycache__/
 *.pyc
-.venv/
-venv/
-*.egg-info/
